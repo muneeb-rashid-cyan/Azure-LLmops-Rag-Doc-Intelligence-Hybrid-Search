@@ -1,4 +1,4 @@
-# azure-multimodal-rag
+# Azure-LLmops-Rag-Doc-Intelligence-Hybrid-Search
 
 > Production-grade Multi-Modal RAG system using Azure Document Intelligence, Azure AI Search hybrid retrieval, cross-encoder reranking, context compression, GPT-4.1 generation, and Azure AI Evaluation — all served via a FastAPI dashboard.
 
