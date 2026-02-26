@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Intelligence — Document Q&A</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:         #1a1814;
+  --bg1:        #201e1a;
+  --bg2:        #272420;
+  --bg3:        #2e2b26;
+  --border:     #333028;
+  --border2:    #3d3930;
+  --accent:     #e8a84c;
+  --accent-dim: rgba(232,168,76,0.08);
+  --accent-glow:rgba(232,168,76,0.18);
+  --accent-dark:#c48a2e;
+  --green:      #6db87a;
+  --yellow:     #d4a847;
+  --red:        #c96060;
+  --text:       #e8e2d9;
+  --text-mid:   #9e9488;
+  --text-dim:   #5a544c;
+  --font-ui:    'Inter', sans-serif;
+  --font-serif: 'Crimson Pro', Georgia, serif;
+  --font-mono:  'JetBrains Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  display: grid;
+  grid-template-rows: 52px 1fr;
+  grid-template-columns: 280px 1fr 320px;
+  height: 100vh;
+}
+
+/* TOPBAR */
+.topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+}
+
+.logo { display: flex; align-items: center; gap: 10px; }
+
+.logo-mark {
+  width: 26px; height: 26px;
+  background: var(--accent);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+.logo-name { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: -0.2px; }
+.logo-sub  { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; }
+
+.topbar-right { display: flex; align-items: center; gap: 20px; }
+.topbar-stat  { text-align: center; }
+.topbar-stat-val   { font-family: var(--font-mono); font-size: 15px; font-weight: 500; color: var(--accent); line-height: 1; }
+.topbar-stat-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px; }
+
+.status-pill {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border2); border-radius: 20px;
+  font-size: 11px; color: var(--text-mid);
+}
+.status-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--green);
+  animation: blink 2.5s ease-in-out infinite;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+/* LEFT PANEL */
+.panel-left {
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+.panel-header {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.panel-label { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 1.2px; color: var(--text-dim); }
+.panel-count { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+
+.upload-zone {
+  margin: 10px;
+  border: 1px dashed var(--border2); border-radius: 8px;
+  padding: 18px 12px; text-align: center; cursor: pointer;
+  transition: all 0.2s; flex-shrink: 0; position: relative;
+}
+.upload-zone:hover, .upload-zone.drag-over { border-color: var(--accent); background: var(--accent-dim); }
+.upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.upload-icon { color: var(--accent); margin-bottom: 7px; }
+.upload-text { font-size: 12px; font-weight: 500; color: var(--text-mid); margin-bottom: 3px; }
+.upload-sub  { font-family: var(--font-mono); font-size: 9px; color: var(--text-dim); }
+
+.upload-progress { display: none; margin: 0 10px 6px; flex-shrink: 0; }
+.progress-label  { font-family: var(--font-mono); font-size: 10px; color: var(--accent); margin-bottom: 5px; display: flex; justify-content: space-between; }
+.progress-track  { height: 2px; background: var(--border); border-radius: 1px; overflow: hidden; }
+.progress-fill   { height: 100%; background: var(--accent); border-radius: 1px; width: 0%; transition: width 0.3s ease; }
+
+.doc-list { flex: 1; overflow-y: auto; padding: 6px; }
+.doc-item { display: flex; align-items: flex-start; gap: 9px; padding: 9px 10px; border-radius: 6px; cursor: pointer; transition: background 0.15s; margin-bottom: 1px; }
+.doc-item:hover { background: var(--bg2); }
+.doc-icon { width: 28px; height: 34px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
+.doc-info { flex: 1; min-width: 0; }
+.doc-name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+/* MAIN */
+.panel-main {
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg); border-right: 1px solid var(--border);
+}
+
+.messages { flex: 1; overflow-y: auto; padding: 32px 36px; display: flex; flex-direction: column; gap: 24px; }
+
+.welcome {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; gap: 14px;
+  animation: fadein 0.5s ease;
+}
+@keyframes fadein { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+
+.welcome-title { font-family: var(--font-serif); font-size: 40px; font-weight: 400; color: var(--text); text-align: center; line-height: 1.15; }
+.welcome-title em { font-style: italic; color: var(--accent); }
+.welcome-sub { font-size: 13px; color: var(--text-dim); text-align: center; max-width: 380px; line-height: 1.7; }
+
+.welcome-steps { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; max-width: 500px; margin-top: 10px; }
+.welcome-step  { background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; padding: 14px 12px; text-align: center; }
+.step-num { font-family: var(--font-mono); font-size: 18px; font-weight: 500; color: var(--accent); margin-bottom: 7px; }
+.step-text { font-size: 11px; color: var(--text-mid); line-height: 1.55; }
+
+.msg { display: flex; flex-direction: column; gap: 5px; animation: fadein 0.25s ease; }
+.msg-user      { align-items: flex-end; }
+.msg-assistant { align-items: flex-start; }
+.msg-label { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim); padding: 0 3px; }
+.msg-bubble { max-width: 76%; padding: 13px 16px; border-radius: 10px; font-size: 14px; line-height: 1.75; }
+.msg-user .msg-bubble      { background: var(--bg2); border: 1px solid var(--border2); color: var(--text); border-bottom-right-radius: 3px; }
+.msg-assistant .msg-bubble { background: var(--bg1); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 3px; }
+.msg-assistant .msg-bubble.thinking { color: var(--text-dim); font-size: 13px; font-style: italic; }
+
+.citation-ref {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px;
+  background: var(--accent-dim); border: 1px solid var(--accent-dark); border-radius: 3px;
+  font-family: var(--font-mono); font-size: 9px; font-weight: 500; color: var(--accent);
+  cursor: pointer; vertical-align: middle; margin: 0 1px; transition: background 0.15s;
+}
+.citation-ref:hover { background: var(--accent-glow); }
+
+.eval-bar  { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; padding: 0 3px; }
+.eval-chip { padding: 3px 8px; border-radius: 4px; font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--border); background: var(--bg2); color: var(--text-mid); }
+.eval-chip.good { border-color: rgba(109,184,122,0.35); color: var(--green); }
+.eval-chip.mid  { border-color: rgba(212,168,71,0.35);  color: var(--yellow); }
+.eval-chip.bad  { border-color: rgba(201,96,96,0.35);   color: var(--red); }
+
+.input-area { padding: 14px 20px 18px; border-top: 1px solid var(--border); background: var(--bg1); flex-shrink: 0; }
+.input-wrap { display: flex; gap: 10px; align-items: flex-end; background: var(--bg2); border: 1px solid var(--border2); border-radius: 9px; padding: 10px 12px; transition: border-color 0.2s; }
+.input-wrap:focus-within { border-color: var(--accent); }
+
+#question-input {
+  flex: 1; background: none; border: none; outline: none;
+  color: var(--text); font-family: var(--font-ui); font-size: 14px;
+  resize: none; line-height: 1.5; max-height: 120px; min-height: 22px;
+}
+#question-input::placeholder { color: var(--text-dim); }
+
+.send-btn {
+  width: 34px; height: 34px; border-radius: 7px;
+  background: var(--accent); border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: all 0.15s; color: #1a1814;
+}
+.send-btn:hover    { background: #f0b85a; transform: scale(1.04); }
+.send-btn:disabled { background: var(--border); cursor: not-allowed; transform: none; color: var(--text-dim); }
+
+.input-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 7px; padding: 0 2px; }
+.input-hint { font-size: 10px; color: var(--text-dim); }
+
+.eval-toggle { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-mid); cursor: pointer; user-select: none; }
+.toggle-sw   { width: 28px; height: 15px; background: var(--border2); border-radius: 8px; position: relative; transition: background 0.2s; }
+.toggle-sw.on { background: var(--accent-dark); }
+.toggle-thumb { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; background: white; border-radius: 50%; transition: transform 0.2s; }
+.toggle-sw.on .toggle-thumb { transform: translateX(13px); }
+
+/* RIGHT */
+.panel-right { background: var(--bg1); display: flex; flex-direction: column; overflow: hidden; }
+
+.tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.tab  { flex: 1; padding: 13px 6px; text-align: center; font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
+.tab:hover  { color: var(--text-mid); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-content        { display: none; flex: 1; overflow-y: auto; flex-direction: column; }
+.tab-content.active { display: flex; }
+
+.context-list { padding: 10px; }
+.ctx-chunk    { background: var(--bg2); border: 1px solid var(--border); border-radius: 7px; padding: 10px 11px; margin-bottom: 7px; }
+.ctx-source   { font-family: var(--font-mono); font-size: 10px; color: var(--accent); margin-bottom: 6px; }
+.ctx-text     { font-size: 12px; color: var(--text-mid); line-height: 1.6; border-left: 2px solid var(--border2); padding-left: 8px; }
+.ctx-section-label { font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); padding: 10px 2px 6px; }
+
+.eval-panel       { padding: 14px; }
+.eval-metric      { margin-bottom: 14px; }
+.eval-metric-row  { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+.eval-metric-name { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-mid); }
+.eval-metric-val  { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+.s5,.s4 { color: var(--green); }
+.s3     { color: var(--yellow); }
+.s2,.s1 { color: var(--red); }
+.eval-track { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.eval-fill  { height: 100%; border-radius: 2px; transition: width 0.7s cubic-bezier(0.34,1.56,0.64,1); }
+.f5,.f4 { background: var(--green); }
+.f3     { background: var(--yellow); }
+.f2,.f1 { background: var(--red); }
+
+.alert-box { display: flex; align-items: center; gap: 7px; padding: 9px 11px; border-radius: 6px; font-size: 11px; margin-bottom: 12px; }
+.alert-box.bad  { background: rgba(201,96,96,0.07);   border: 1px solid rgba(201,96,96,0.25);   color: var(--red); }
+.alert-box.good { background: rgba(109,184,122,0.07); border: 1px solid rgba(109,184,122,0.2);  color: var(--green); }
+
+.stat-rows { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.stat-row  { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; }
+.stat-val   { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--accent); }
+
+.citation-list { padding: 10px; }
+.cit-item { background: var(--bg2); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 6px; padding: 9px 11px; margin-bottom: 7px; }
+.cit-num  { font-family: var(--font-mono); font-size: 10px; color: var(--accent); margin-bottom: 3px; }
+.cit-doc  { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 2px; }
+.cit-page { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 180px; color: var(--text-dim); font-size: 11px; gap: 8px; text-align: center; padding: 20px; }
+
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.thinking-dots span { animation: dot 1.4s ease-in-out infinite; display: inline-block; }
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dot { 0%,80%,100%{opacity:0.15} 40%{opacity:1} }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header class="topbar">
+    <div class="logo">
+      <div class="logo-mark">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1a1814" stroke-width="2.5">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+      </div>
+      <div>
+        <div class="logo-name">RAG Intelligence</div>
+        <div class="logo-sub">Document Q&A · Azure AI</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="topbar-stat">
+        <div class="topbar-stat-val" id="stat-docs">0</div>
+        <div class="topbar-stat-label">Documents</div>
+      </div>
+      <div class="topbar-stat">
+        <div class="topbar-stat-val" id="stat-queries">0</div>
+        <div class="topbar-stat-label">Queries</div>
+      </div>
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        <span>Connected</span>
+      </div>
+    </div>
+  </header>
+
+  <aside class="panel-left">
+    <div class="panel-header">
+      <span class="panel-label">Documents</span>
+      <span class="panel-count" id="doc-count">0</span>
+    </div>
+    <div class="upload-zone" id="upload-zone">
+      <input type="file" id="file-input" accept=".pdf,.docx,.png,.jpg,.jpeg,.tiff" multiple>
+      <div class="upload-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <div class="upload-text">Drop files or click to upload</div>
+      <div class="upload-sub">PDF · DOCX · PNG · JPG · TIFF</div>
+    </div>
+    <div class="upload-progress" id="upload-progress">
+      <div class="progress-label">
+        <span id="progress-text">Processing...</span>
+        <span id="progress-pct">0%</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+    </div>
+    <div class="doc-list" id="doc-list">
+      <div class="empty">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        <span>No documents yet</span>
+      </div>
+    </div>
+  </aside>
+
+  <main class="panel-main">
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-title">Ask your <em>documents</em></div>
+        <div class="welcome-sub">Upload a document, then ask any question.<br>Powered by hybrid search · cross-encoder reranking · GPT-4.1</div>
+        <div class="welcome-steps">
+          <div class="welcome-step"><div class="step-num">01</div><div class="step-text">Upload a PDF or image document</div></div>
+          <div class="welcome-step"><div class="step-num">02</div><div class="step-text">Ask any question in natural language</div></div>
+          <div class="welcome-step"><div class="step-num">03</div><div class="step-text">Get grounded answers with citations</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="input-area">
+      <div class="input-wrap">
+        <textarea id="question-input" placeholder="Ask a question about your documents..." rows="1"></textarea>
+        <button class="send-btn" id="send-btn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="input-meta">
+        <span class="input-hint">Enter to send · Shift+Enter for new line</span>
+        <label class="eval-toggle" id="eval-toggle">
+          <span>Evaluate</span>
+          <div class="toggle-sw on" id="toggle-sw"><div class="toggle-thumb"></div></div>
+        </label>
+      </div>
+    </div>
+  </main>
+
+  <aside class="panel-right">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('context',this)">Context</div>
+      <div class="tab" onclick="switchTab('eval',this)">Evaluation</div>
+      <div class="tab" onclick="switchTab('citations',this)">Citations</div>
+    </div>
+    <div class="tab-content active" id="tab-context">
+      <div class="context-list" id="context-list">
+        <div class="empty"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><span>Retrieved chunks appear here</span></div>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-eval">
+      <div class="eval-panel" id="eval-panel">
+        <div class="empty"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Eval scores appear after query</span></div>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-citations">
+      <div class="citation-list" id="citation-list">
+        <div class="empty"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span>Citations appear after query</span></div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+<script>
+let evalEnabled = true, queryCount = 0;
+
+document.addEventListener('DOMContentLoaded', () => { loadDocuments(); autoResize(); });
+
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+document.getElementById('eval-toggle').addEventListener('click', () => {
+  evalEnabled = !evalEnabled;
+  document.getElementById('toggle-sw').classList.toggle('on', evalEnabled);
+});
+
+const uploadZone = document.getElementById('upload-zone');
+const fileInput  = document.getElementById('file-input');
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => { e.preventDefault(); uploadZone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
+fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+async function handleFiles(files) { for (const f of files) await uploadFile(f); await loadDocuments(); }
+
+async function uploadFile(file) {
+  const prog = document.getElementById('upload-progress');
+  const fill = document.getElementById('progress-fill');
+  const lbl  = document.getElementById('progress-text');
+  const pct  = document.getElementById('progress-pct');
+  prog.style.display = 'block'; lbl.textContent = 'Ingesting ' + file.name + '...';
+  let p = 0;
+  const tick = setInterval(() => { p = Math.min(p + Math.random()*8, 90); fill.style.width = p+'%'; pct.textContent = Math.round(p)+'%'; }, 300);
+  try {
+    const form = new FormData(); form.append('file', file);
+    const res = await fetch('/api/ingest', { method:'POST', body:form });
+    const d   = await res.json();
+    clearInterval(tick); fill.style.width='100%'; pct.textContent='100%';
+    lbl.textContent = '✓ ' + file.name + ' — ' + (d.chunk_count||'?') + ' chunks';
+    setTimeout(() => { prog.style.display='none'; fill.style.width='0%'; }, 2000);
+  } catch(e) { clearInterval(tick); lbl.textContent='✗ Failed: '+file.name; setTimeout(()=>{prog.style.display='none';fill.style.width='0%';},2000); }
+}
+
+async function loadDocuments() {
+  try {
+    const res  = await fetch('/api/documents');
+    const data = await res.json();
+    const docs = data.documents || [];
+    document.getElementById('stat-docs').textContent  = docs.length;
+    document.getElementById('doc-count').textContent  = docs.length;
+    const list = document.getElementById('doc-list');
+    if (!docs.length) { list.innerHTML = '<div class="empty"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span>No documents yet</span></div>'; return; }
+    list.innerHTML = docs.map(d => '<div class="doc-item"><div class="doc-icon">'+emoji(d.file_name)+'</div><div class="doc-info"><div class="doc-name">'+(d.file_name||d.id)+'</div><div class="doc-meta">'+(d.total_pages||'?')+'p · '+(d.total_chunks||'?')+' chunks</div></div></div>').join('');
+  } catch(e) { console.error(e); }
+}
+
+function emoji(n) { if(!n) return '📄'; const e=n.split('.').pop().toLowerCase(); return ({pdf:'📄',docx:'📝',png:'🖼️',jpg:'🖼️',jpeg:'🖼️',tiff:'🖼️'})[e]||'📄'; }
+
+const input = document.getElementById('question-input');
+const sendBtn = document.getElementById('send-btn');
+sendBtn.addEventListener('click', sendQuery);
+input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendQuery();} });
+input.addEventListener('input', autoResize);
+function autoResize() { input.style.height='auto'; input.style.height=Math.min(input.scrollHeight,120)+'px'; }
+
+async function sendQuery() {
+  const q = input.value.trim(); if(!q) return;
+  const wel = document.getElementById('welcome'); if(wel) wel.remove();
+  input.value=''; autoResize(); sendBtn.disabled=true;
+  appendMsg('user', q);
+  const tid = 'think-'+Date.now();
+  appendMsg('assistant','<span class="thinking-dots"><span>●</span><span>●</span><span>●</span></span>',tid,true);
+  try {
+    const res  = await fetch('/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,evaluate:evalEnabled})});
+    const data = await res.json();
+    document.getElementById(tid)?.remove();
+    appendMsg('assistant', fmtCit(data.answer, data.citations||[]) + evalChips(data.eval_scores));
+    updateCtx(data); updateEval(data.eval_scores, data.retrieval_stats); updateCit(data.citations);
+    queryCount++; document.getElementById('stat-queries').textContent=queryCount;
+    if(data.eval_scores) switchTab('eval',document.querySelectorAll('.tab')[1]);
+  } catch(e) { document.getElementById(tid)?.remove(); appendMsg('assistant','<span style="color:var(--red)">Error: '+e.message+'</span>'); }
+  sendBtn.disabled=false; scrollBot();
+}
+
+function appendMsg(role,html,id,thinking) {
+  const msgs=document.getElementById('messages');
+  const d=document.createElement('div'); d.className='msg msg-'+role; if(id) d.id=id;
+  d.innerHTML='<div class="msg-label">'+(role==='user'?'You':'RAG')+'</div><div class="msg-bubble'+(thinking?' thinking':'')+'">'+html+'</div>';
+  msgs.appendChild(d); scrollBot();
+}
+
+function scrollBot() { const m=document.getElementById('messages'); m.scrollTop=m.scrollHeight; }
+
+function fmtCit(answer,citations) {
+  const seen={}; let idx=1;
+  return answer.replace(/\[([^\]]+),\s*[Pp]age\s*(\d+)\]/g,(match,doc,page)=>{
+    const key=doc.trim()+'_'+page; if(!seen[key]) seen[key]=idx++;
+    return '<span class="citation-ref" title="'+doc.trim()+', Page '+page+'">'+seen[key]+'</span>';
+  });
+}
+
+function evalChips(scores) {
+  if(!scores) return '';
+  const chips=[{l:'Grounded',v:scores.groundedness},{l:'Relevant',v:scores.relevance},{l:'Coherent',v:scores.coherence}];
+  const html=chips.map(c=>'<div class="eval-chip '+(c.v>=4?'good':c.v>=3?'mid':'bad')+'">'+c.l+' '+c.v?.toFixed(1)+'/5</div>').join('');
+  const hall=scores.hallucination_detected?'<div class="eval-chip bad">&#9888; Hallucination</div>':'';
+  return '<div class="eval-bar">'+html+hall+'</div>';
+}
+
+function updateCtx(data) {
+  const list=document.getElementById('context-list');
+  const stats=data.retrieval_stats||{}, rewrites=data.rewritten_queries||[];
+  if(!stats.context_chunks&&!rewrites.length){list.innerHTML='<div class="empty"><span>No context retrieved</span></div>';return;}
+  let html='';
+  if(rewrites.length){ html+='<div class="ctx-section-label">Query Rewrites</div>'; rewrites.forEach((q,i)=>{html+='<div class="ctx-chunk"><div class="ctx-source">Variant '+(i+1)+'</div><div class="ctx-text">'+q+'</div></div>';}); }
+  if(stats.context_chunks){ html+='<div class="ctx-section-label">Retrieval Stats</div><div class="ctx-chunk"><div class="stat-row"><span class="stat-label">Candidates</span><span class="stat-val">'+(stats.total_candidates??'—')+'</span></div><div class="stat-row"><span class="stat-label">After Rerank</span><span class="stat-val">'+(stats.after_rerank??'—')+'</span></div><div class="stat-row"><span class="stat-label">Context Used</span><span class="stat-val">'+(stats.context_chunks??'—')+'</span></div></div>'; }
+  list.innerHTML=html||'<div class="empty"><span>No context data</span></div>';
+}
+
+function updateEval(scores, stats) {
+  const panel=document.getElementById('eval-panel');
+  if(!scores){panel.innerHTML='<div class="empty"><span>Evaluation disabled or unavailable</span></div>';return;}
+  const hall=scores.hallucination_detected?'<div class="alert-box bad">&#9888; Hallucination detected</div>':'<div class="alert-box good">&#10003; No hallucination detected</div>';
+  const metrics=[{n:'Groundedness',v:scores.groundedness,mx:5},{n:'Relevance',v:scores.relevance,mx:5},{n:'Coherence',v:scores.coherence,mx:5},{n:'Overall',v:scores.overall*5,mx:5}];
+  const mhtml=metrics.map(m=>{ const pct=((m.v/m.mx)*100).toFixed(0); const lv=m.v>=4?5:m.v>=3.5?4:m.v>=3?3:m.v>=2?2:1; return '<div class="eval-metric"><div class="eval-metric-row"><span class="eval-metric-name">'+m.n+'</span><span class="eval-metric-val s'+lv+'">'+m.v?.toFixed(1)+' / '+m.mx+'</span></div><div class="eval-track"><div class="eval-fill f'+lv+'" style="width:'+pct+'%"></div></div></div>'; }).join('');
+  const shtml=stats?'<div class="stat-rows"><div class="stat-row"><span class="stat-label">Candidates</span><span class="stat-val">'+(stats.total_candidates??'—')+'</span></div><div class="stat-row"><span class="stat-label">After Rerank</span><span class="stat-val">'+(stats.after_rerank??'—')+'</span></div><div class="stat-row"><span class="stat-label">Used</span><span class="stat-val">'+(stats.context_chunks??'—')+'</span></div></div>':'';
+  panel.innerHTML=hall+mhtml+shtml;
+}
+
+function updateCit(citations) {
+  const list=document.getElementById('citation-list');
+  if(!citations||!citations.length){list.innerHTML='<div class="empty"><span>No citations in this answer</span></div>';return;}
+  list.innerHTML=citations.map((c,i)=>'<div class="cit-item"><div class="cit-num">['+(i+1)+']</div><div class="cit-doc">'+c.doc_name+'</div><div class="cit-page">Page '+c.page_number+'</div></div>').join('');
+}
+</script>
+</body>
+</html>

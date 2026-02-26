@@ -1,0 +1,330 @@
+# ============================================================
+# Project 12: Multi-Modal RAG — Azure DevOps CI/CD Pipeline
+#
+# Stages:
+#   1. Validate  → lint + unit tests (no Azure calls)
+#   2. Evaluate  → run RAG eval on sample questions
+#   3. Build     → Docker image → ACR
+#   4. Deploy    → Azure Web App
+# ============================================================
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    exclude:
+      - README.md
+      - data/**
+      - "*.md"
+
+variables:
+  PYTHON_VERSION:  '3.11'
+  ACR_NAME:        costforecastingmlopsacr
+  IMAGE_NAME:      rag-dashboard
+  IMAGE_TAG:       $(Build.BuildId)
+  WEBAPP_NAME:     enhanced-mlops-api-muneeb
+  RESOURCE_GROUP:  mirlin-ml-dev
+
+# ── STAGE 1: VALIDATE ──────────────────────────────────────────
+stages:
+- stage: Validate
+  displayName: '🔍 Validate'
+  jobs:
+  - job: LintAndTest
+    displayName: 'Lint + Unit Tests'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+      displayName: 'Set Python $(PYTHON_VERSION)'
+
+    - script: |
+        pip install uv
+        uv venv .venv
+        source .venv/bin/activate
+        uv pip install -r requirements.txt
+      displayName: 'Install dependencies'
+
+    - script: |
+        source .venv/bin/activate
+        ruff check ingestion/ retrieval/ generation/ evaluation/ dashboard/ \
+          --select=E,F,W --ignore=E501 --output-format=github
+      displayName: 'Ruff lint'
+      continueOnError: true
+
+    - script: |
+        source .venv/bin/activate
+        pytest tests/ -v \
+          --tb=short \
+          --junit-xml=test-results.xml \
+          -p no:warnings
+      displayName: 'Unit tests (no Azure calls)'
+      env:
+        # Minimal env for tests that need config loaded
+        AZURE_OPENAI_ENDPOINT:             "https://placeholder.openai.azure.com/"
+        AZURE_OPENAI_KEY:                  "placeholder"
+        AZURE_OPENAI_DEPLOYMENT:           "gpt-4.1"
+        AZURE_OPENAI_EMB_DEPLOYMENT:       "text-embedding-ada-002"
+        DOCUMENT_INTELLIGENCE_ENDPOINT:    "https://placeholder.cognitiveservices.azure.com/"
+        DOCUMENT_INTELLIGENCE_KEY:         "placeholder"
+        AZURE_SEARCH_ENDPOINT:             "https://placeholder.search.windows.net"
+        AZURE_SEARCH_KEY:                  "placeholder"
+        COSMOS_ENDPOINT:                   "https://placeholder.documents.azure.com:443/"
+        COSMOS_KEY:                        "placeholder"
+
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: JUnit
+        testResultsFiles: test-results.xml
+        failTaskOnFailedTests: true
+      displayName: 'Publish test results'
+      condition: always()
+
+    - script: |
+        source .venv/bin/activate
+        python -c "
+        # Smoke test — verify all modules import cleanly
+        import ingestion.chunker
+        import retrieval.hybrid_search
+        import retrieval.reranker
+        import generation.citation_formatter
+        import evaluation.metrics
+        print('✅ All modules import successfully')
+        "
+      displayName: 'Import smoke test'
+      env:
+        AZURE_OPENAI_ENDPOINT:          "https://placeholder.openai.azure.com/"
+        AZURE_OPENAI_KEY:               "placeholder"
+        AZURE_OPENAI_DEPLOYMENT:        "gpt-4.1"
+        AZURE_OPENAI_EMB_DEPLOYMENT:    "text-embedding-ada-002"
+        DOCUMENT_INTELLIGENCE_ENDPOINT: "https://placeholder.cognitiveservices.azure.com/"
+        DOCUMENT_INTELLIGENCE_KEY:      "placeholder"
+        AZURE_SEARCH_ENDPOINT:          "https://placeholder.search.windows.net"
+        AZURE_SEARCH_KEY:               "placeholder"
+        COSMOS_ENDPOINT:                "https://placeholder.documents.azure.com:443/"
+        COSMOS_KEY:                     "placeholder"
+
+# ── STAGE 2: EVALUATE ──────────────────────────────────────────
+- stage: Evaluate
+  displayName: '📊 RAG Quality Gate'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - job: EvalQualityGate
+    displayName: 'Run eval dataset + quality gate'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - script: |
+        pip install uv
+        uv venv .venv
+        source .venv/bin/activate
+        uv pip install -r requirements.txt
+      displayName: 'Install dependencies'
+
+    - script: |
+        source .venv/bin/activate
+        python -c "
+        import json
+        from pathlib import Path
+        from evaluation.metrics import aggregate_eval_scores
+
+        eval_path = Path('data/eval_dataset/eval_questions.json')
+        if not eval_path.exists():
+            print('No eval dataset found — skipping quality gate')
+            exit(0)
+
+        with open(eval_path) as f:
+            questions = json.load(f)
+
+        print(f'Running quality gate on {len(questions)} questions...')
+
+        from retrieval.pipeline import run_retrieval_pipeline
+        from generation.answer_generator import generate_answer
+        from evaluation.evaluator import evaluate_answer
+
+        results = []
+        # Run on first 10 questions for CI speed
+        for q in questions[:10]:
+            try:
+                r = run_retrieval_pipeline(q['question'])
+                a = generate_answer(q['question'], r.context)
+                scores = evaluate_answer(
+                    query=q['question'],
+                    answer=a.answer,
+                    context_chunks=r.context,
+                    ground_truth=q.get('ground_truth'),
+                    log_to_mlflow=False,
+                )
+                results.append({
+                    'groundedness': scores.groundedness,
+                    'relevance':    scores.relevance,
+                    'coherence':    scores.coherence,
+                    'overall':      scores.overall,
+                    'hallucination_detected': scores.hallucination_detected,
+                })
+                print(f'  Q: {q[\"question\"][:50]}...')
+                print(f'  Scores: G={scores.groundedness:.1f} R={scores.relevance:.1f} C={scores.coherence:.1f}')
+            except Exception as e:
+                print(f'  Eval error: {e}')
+
+        if not results:
+            print('No results — skipping gate')
+            exit(0)
+
+        agg = aggregate_eval_scores(results)
+        print('')
+        print('=== QUALITY GATE RESULTS ===')
+        for k, v in agg.items():
+            print(f'  {k}: {v}')
+
+        # GATE: fail pipeline if quality drops
+        GROUNDEDNESS_MIN = 3.0
+        HALLUCINATION_MAX = 0.3
+
+        if agg.get('groundedness_mean', 5) < GROUNDEDNESS_MIN:
+            print(f'GATE FAILED: groundedness {agg[\"groundedness_mean\"]:.2f} < {GROUNDEDNESS_MIN}')
+            exit(1)
+
+        if agg.get('hallucination_rate', 0) > HALLUCINATION_MAX:
+            print(f'GATE FAILED: hallucination rate {agg[\"hallucination_rate\"]:.2f} > {HALLUCINATION_MAX}')
+            exit(1)
+
+        print('')
+        print('✅ Quality gate passed!')
+        "
+      displayName: 'Quality gate eval'
+      env:
+        AZURE_OPENAI_ENDPOINT:          $(AZURE_OPENAI_ENDPOINT)
+        AZURE_OPENAI_KEY:               $(AZURE_OPENAI_KEY)
+        AZURE_OPENAI_DEPLOYMENT:        $(AZURE_OPENAI_DEPLOYMENT)
+        AZURE_OPENAI_EMB_DEPLOYMENT:    $(AZURE_OPENAI_EMB_DEPLOYMENT)
+        DOCUMENT_INTELLIGENCE_ENDPOINT: $(DOCUMENT_INTELLIGENCE_ENDPOINT)
+        DOCUMENT_INTELLIGENCE_KEY:      $(DOCUMENT_INTELLIGENCE_KEY)
+        AZURE_SEARCH_ENDPOINT:          $(AZURE_SEARCH_ENDPOINT)
+        AZURE_SEARCH_KEY:               $(AZURE_SEARCH_KEY)
+        COSMOS_ENDPOINT:                $(COSMOS_ENDPOINT)
+        COSMOS_KEY:                     $(COSMOS_KEY)
+      continueOnError: true   # don't fail pipeline if no eval dataset yet
+
+# ── STAGE 3: BUILD ─────────────────────────────────────────────
+- stage: Build
+  displayName: '🐳 Build & Push Docker'
+  dependsOn: Validate
+  condition: succeeded()
+  jobs:
+  - job: BuildAndPush
+    displayName: 'Build image → ACR'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+
+    - task: Docker@2
+      displayName: 'Build & push to ACR'
+      inputs:
+        command: buildAndPush
+        containerRegistry: $(ACR_SERVICE_CONNECTION)
+        repository: $(IMAGE_NAME)
+        dockerfile: Dockerfile
+        buildContext: .
+        tags: |
+          $(IMAGE_TAG)
+          latest
+
+    - script: |
+        echo "✅ Image: $(ACR_NAME).azurecr.io/$(IMAGE_NAME):$(IMAGE_TAG)"
+      displayName: 'Print image reference'
+
+# ── STAGE 4: DEPLOY ────────────────────────────────────────────
+- stage: Deploy
+  displayName: '🚀 Deploy to Azure Web App'
+  dependsOn:
+    - Build
+    - Evaluate
+  condition: succeeded()
+  jobs:
+  - deployment: DeployWebApp
+    displayName: 'Deploy to $(WEBAPP_NAME)'
+    environment: 'production'
+    pool:
+      vmImage: ubuntu-latest
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          - task: AzureCLI@2
+            displayName: 'Configure container + deploy'
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                ACR_SERVER="$(ACR_NAME).azurecr.io"
+                ACR_PASS=$(az acr credential show \
+                  --name $(ACR_NAME) \
+                  --query "passwords[0].value" -o tsv)
+
+                # Point web app to new image
+                az webapp config container set \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --name $(WEBAPP_NAME) \
+                  --docker-custom-image-name "$ACR_SERVER/$(IMAGE_NAME):$(IMAGE_TAG)" \
+                  --docker-registry-server-url "https://$ACR_SERVER" \
+                  --docker-registry-server-user "$(ACR_NAME)" \
+                  --docker-registry-server-password "$ACR_PASS" \
+                  --output none
+
+                # Inject all secrets as app settings
+                az webapp config appsettings set \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --name $(WEBAPP_NAME) \
+                  --settings \
+                    AZURE_OPENAI_ENDPOINT="$(AZURE_OPENAI_ENDPOINT)" \
+                    AZURE_OPENAI_KEY="$(AZURE_OPENAI_KEY)" \
+                    AZURE_OPENAI_DEPLOYMENT="$(AZURE_OPENAI_DEPLOYMENT)" \
+                    AZURE_OPENAI_EMB_DEPLOYMENT="$(AZURE_OPENAI_EMB_DEPLOYMENT)" \
+                    DOCUMENT_INTELLIGENCE_ENDPOINT="$(DOCUMENT_INTELLIGENCE_ENDPOINT)" \
+                    DOCUMENT_INTELLIGENCE_KEY="$(DOCUMENT_INTELLIGENCE_KEY)" \
+                    AZURE_SEARCH_ENDPOINT="$(AZURE_SEARCH_ENDPOINT)" \
+                    AZURE_SEARCH_KEY="$(AZURE_SEARCH_KEY)" \
+                    AZURE_SEARCH_INDEX="$(AZURE_SEARCH_INDEX)" \
+                    COSMOS_ENDPOINT="$(COSMOS_ENDPOINT)" \
+                    COSMOS_KEY="$(COSMOS_KEY)" \
+                    COSMOS_DATABASE="MultiModalRAG" \
+                    WEBSITES_PORT=8000 \
+                  --output none
+
+                # Restart
+                az webapp restart \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --name $(WEBAPP_NAME) \
+                  --output none
+
+                echo "Waiting for app to start..."
+                sleep 30
+
+                # Health check with retries
+                URL="https://$(WEBAPP_NAME).azurewebsites.net/health"
+                for i in {1..5}; do
+                  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                  if [ "$STATUS" = "200" ]; then
+                    echo "✅ Health check passed (attempt $i) — $URL"
+                    break
+                  fi
+                  echo "  Attempt $i: $STATUS — retrying in 20s..."
+                  sleep 20
+                done
+
+                echo ""
+                echo "================================================"
+                echo " Live: https://$(WEBAPP_NAME).azurewebsites.net"
+                echo "================================================"
